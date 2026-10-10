@@ -103,7 +103,7 @@ def validate_quotes(categories: list[dict], transcript: list[dict]) -> list[dict
 
 # ---------- LLM evaluation ----------
 
-async def evaluate_with_llm(topic: str, transcript: list[dict]) -> list[dict]:
+async def evaluate_with_llm(topic: str, transcript: list[dict], api_key: str = "") -> list[dict]:
     """One LLM call across 6 categories. Returns scored feedback with quotes."""
 
     # Build transcript text
@@ -160,8 +160,12 @@ Return ONLY valid JSON array:
 ]
 """
 
-    if IS_KEY_CONFIGURED:
+    active_key = (api_key or os.getenv("GEMINI_API_KEY", "")).strip()
+    key_available = bool(active_key and active_key != "your-api-key-here" and len(active_key) > 10)
+
+    if key_available:
         try:
+            genai.configure(api_key=active_key)
             model = genai.GenerativeModel(
                 STRONG_MODEL,
                 generation_config=genai.GenerationConfig(
@@ -322,10 +326,10 @@ def evaluate_heuristic(topic: str, transcript: list[dict]) -> list[dict]:
     ]
 
 
-async def generate_report(topic: str, transcript: list[dict]) -> dict:
+async def generate_report(topic: str, transcript: list[dict], api_key: str = "") -> dict:
     """Full report: metrics + LLM evaluation + quote validation."""
     metrics = compute_metrics(transcript)
-    categories = await evaluate_with_llm(topic, transcript)
+    categories = await evaluate_with_llm(topic, transcript, api_key=api_key)
     categories = validate_quotes(categories, transcript)
 
     return {

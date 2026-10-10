@@ -21,40 +21,61 @@ export function initVoices(participants, callback) {
     const voices = window.speechSynthesis.getVoices();
     if (voices.length === 0) return;
 
-    // Prefer English voices
-    const englishVoices = voices.filter(
-      (v) => v.lang.startsWith("en") && !v.name.includes("Google")
+    // Prefer English/Indian English voices
+    const enVoices = voices.filter(
+      (v) => v.lang.startsWith("en") || v.lang.startsWith("hi")
     );
-    const allUsable = englishVoices.length >= 3 ? englishVoices : voices.filter(v => v.lang.startsWith("en"));
-    const fallbackVoices = allUsable.length >= 2 ? allUsable : voices;
+    const pool = enVoices.length > 0 ? enVoices : voices;
 
-    // Pitch variations to differentiate
-    const pitchMap = {
-      Moderator: 1.0,
-      Aarav: 0.85,
-      Meera: 1.2,
-      Kabir: 0.95,
-      Riya: 1.3,
-      Dev: 1.05,
+    // Prioritize natural / online / Google voices which sound vastly superior
+    const naturalVoices = pool.filter(v => 
+      v.name.includes("Natural") || v.name.includes("Google") || v.name.includes("Online") || v.name.includes("Neural")
+    );
+    const primaryPool = naturalVoices.length >= 3 ? naturalVoices : pool;
+
+    // Detect female and male voices
+    const femaleKeywords = ["female", "zira", "samantha", "victoria", "karen", "susan", "catherine", "heera", "veena", "hazel"];
+    const maleKeywords = ["male", "david", "george", "mark", "richard", "james", "ravi", "sean", "guy"];
+
+    const females = primaryPool.filter(v => femaleKeywords.some(k => v.name.toLowerCase().includes(k)));
+    const males = primaryPool.filter(v => maleKeywords.some(k => v.name.toLowerCase().includes(k)));
+
+    const getMale = (idx) => (males.length > 0 ? males[idx % males.length] : primaryPool[idx % primaryPool.length]);
+    const getFemale = (idx) => (females.length > 0 ? females[idx % females.length] : primaryPool[(idx + 1) % primaryPool.length]);
+
+    // Natural human pitch (0.97 - 1.03) and gentle speaking rates
+    voiceMap = {
+      Moderator: {
+        voice: primaryPool.find(v => v.name.includes("UK") || v.name.includes("George")) || primaryPool[0],
+        pitch: 1.0,
+        rate: 0.98,
+      },
+      Aarav: {
+        voice: getMale(0),
+        pitch: 0.98,
+        rate: 1.02,
+      },
+      Meera: {
+        voice: getFemale(0),
+        pitch: 1.02,
+        rate: 0.98,
+      },
+      Kabir: {
+        voice: getMale(1),
+        pitch: 0.97,
+        rate: 0.95,
+      },
+      Riya: {
+        voice: getFemale(1),
+        pitch: 1.03,
+        rate: 1.02,
+      },
+      Dev: {
+        voice: getMale(2),
+        pitch: 1.01,
+        rate: 1.03,
+      },
     };
-
-    const rateMap = {
-      Moderator: 1.0,
-      Aarav: 1.05,
-      Meera: 1.0,
-      Kabir: 0.9,
-      Riya: 1.05,
-      Dev: 1.1,
-    };
-
-    const allParticipants = ["Moderator", ...participants];
-    allParticipants.forEach((name, i) => {
-      voiceMap[name] = {
-        voice: fallbackVoices[i % fallbackVoices.length],
-        pitch: pitchMap[name] || 1.0,
-        rate: rateMap[name] || 1.0,
-      };
-    });
 
     if (callback) callback(voiceMap);
   };

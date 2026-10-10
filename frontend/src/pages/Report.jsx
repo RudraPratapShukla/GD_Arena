@@ -9,7 +9,7 @@ import { fetchReport } from "../lib/api";
 export default function Report() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { topic, transcript } = location.state || {};
+  const { topic, transcript, apiKey } = location.state || {};
 
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -23,7 +23,8 @@ export default function Report() {
 
     const loadReport = async () => {
       try {
-        const data = await fetchReport({ topic, transcript });
+        const activeKey = apiKey || localStorage.getItem("gd_arena_gemini_key") || "";
+        const data = await fetchReport({ topic, transcript, api_key: activeKey });
         setReport(data);
       } catch (err) {
         console.error("Report error:", err);

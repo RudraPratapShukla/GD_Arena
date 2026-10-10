@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 /**
  * Timer – Displays countdown timer with phase label.
@@ -6,23 +6,34 @@ import { useEffect, useState } from "react";
 export default function Timer({ durationSec, onTick, onEnd, phase }) {
   const [timeLeft, setTimeLeft] = useState(durationSec);
 
+  const onTickRef = useRef(onTick);
+  const onEndRef = useRef(onEnd);
+
+  useEffect(() => {
+    onTickRef.current = onTick;
+  }, [onTick]);
+
+  useEffect(() => {
+    onEndRef.current = onEnd;
+  }, [onEnd]);
+
   useEffect(() => {
     setTimeLeft(durationSec);
   }, [durationSec]);
 
   useEffect(() => {
     if (timeLeft <= 0) {
-      if (onEnd) onEnd();
+      if (onEndRef.current) onEndRef.current();
       return;
     }
 
     const interval = setInterval(() => {
       setTimeLeft((prev) => {
         const next = prev - 1;
-        if (onTick) onTick(durationSec - next, next);
+        if (onTickRef.current) onTickRef.current(durationSec - next, next);
         if (next <= 0) {
           clearInterval(interval);
-          if (onEnd) onEnd();
+          if (onEndRef.current) onEndRef.current();
         }
         return next;
       });

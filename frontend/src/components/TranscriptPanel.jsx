@@ -5,12 +5,12 @@ import { PARTICIPANT_INFO } from "../lib/controller";
  * TranscriptPanel – Scrollable transcript with live captions.
  * Each turn has id="turn-{id}" for Report jump-to-turn links.
  */
-export default function TranscriptPanel({ transcript, interimText, showCaptions }) {
+export default function TranscriptPanel({ transcript, interimText, bufferedText, showCaptions }) {
   const bottomRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [transcript, interimText]);
+  }, [transcript, interimText, bufferedText]);
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2 min-h-0">
@@ -33,16 +33,17 @@ export default function TranscriptPanel({ transcript, interimText, showCaptions 
         );
       })}
 
-      {/* Live interim text (muted) */}
-      {showCaptions && interimText && (
-        <div className="transcript-line flex gap-3 opacity-50">
+      {/* Live speech buffer / interim text */}
+      {showCaptions && (bufferedText || interimText) && (
+        <div className="transcript-line flex gap-3 bg-arena-accent/10 border border-arena-accent/30 rounded-lg p-2.5 animate-pulse">
           <span
-            className="font-semibold text-sm whitespace-nowrap shrink-0"
-            style={{ color: PARTICIPANT_INFO.Student.color }}
+            className="font-semibold text-sm whitespace-nowrap shrink-0 text-arena-accent-glow"
           >
-            You (live):
+            You (speaking...):
           </span>
-          <span className="text-sm italic">{interimText}</span>
+          <span className="text-sm italic text-arena-text">
+            {bufferedText ? `${bufferedText} ${interimText}`.trim() : interimText}
+          </span>
         </div>
       )}
 

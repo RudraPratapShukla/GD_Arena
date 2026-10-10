@@ -4,6 +4,7 @@ Stateless server with /health, /turn, and /report endpoints.
 """
 
 import os
+import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -29,6 +30,10 @@ app.add_middleware(
 
 # ---------- Models ----------
 
+class ApiKeyRequest(BaseModel):
+    api_key: str
+
+
 class TurnRequest(BaseModel):
     topic: str
     format: str = "general"
@@ -37,6 +42,7 @@ class TurnRequest(BaseModel):
     phase: str
     last_speaker: str
     transcript: list[dict] = []
+    api_key: str = ""
 
 
 class TranscriptEntry(BaseModel):
@@ -50,6 +56,7 @@ class TranscriptEntry(BaseModel):
 class ReportRequest(BaseModel):
     topic: str
     transcript: list[dict]
+    api_key: str = ""
 
 
 # ---------- Endpoints ----------
@@ -57,6 +64,42 @@ class ReportRequest(BaseModel):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "gd-arena"}
+
+
+@app.get("/api-key-status")
+async def api_key_status():
+    env_key = os.getenv("GEMINI_API_KEY", "").strip()
+    is_valid = bool(env_key and env_key != "your-api-key-here" and len(env_key) > 10)
+    return {
+        "configured": is_valid,
+        "masked_key": f"{env_key[:4]}...{env_key[-4:]}" if is_valid and len(env_key) >= 8 else "",
+    }
+
+
+@app.post("/set-api-key")
+async def set_api_key_endpoint(req: ApiKeyRequest):
+    key = req.api_key.strip()
+    if not key or len(key) < 10:
+        return {"status": "error", "message": "API key appears too short or empty."}
+
+    # Verify key with a lightweight Gemini check
+    import google.generativeai as genai
+    try:
+        genai.configure(api_key=key)
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        # Quick test
+        response = await asyncio.to_thread(model.generate_content, "Say 'OK'")
+        if response and response.text:
+            os.environ["GEMINI_API_KEY"] = key
+            # Update .env
+            env_path = os.path.join(os.path.dirname(__file__), ".env")
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write(f"GEMINI_API_KEY={key}\n")
+            return {"status": "ok", "message": "Gemini 2.0 Flash connected successfully!"}
+    except Exception as e:
+        return {"status": "error", "message": f"Gemini key verification failed: {str(e)}"}
+
+    return {"status": "error", "message": "Could not verify key."}
 
 
 @app.post("/turn")
@@ -69,6 +112,7 @@ async def turn_endpoint(req: TurnRequest):
         phase=req.phase,
         last_speaker=req.last_speaker,
         transcript=req.transcript,
+        api_key=req.api_key,
     )
     return result
 
@@ -78,6 +122,7 @@ async def report_endpoint(req: ReportRequest):
     result = await generate_report(
         topic=req.topic,
         transcript=req.transcript,
+        api_key=req.api_key,
     )
     return result
 

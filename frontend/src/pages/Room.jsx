@@ -12,7 +12,12 @@ import {
 
 /**
  * Room page – Live GD with AI participants.
- * Manages transcript, phases, TTS/STT, interruption, and text fallback.
+ * Features:
+ * - Natural conversational turn-taking with speech buffering
+ * - Permanent moderator deduplication
+ * - Manual floor control (Hold Floor / Speak Now)
+ * - Chrome STT live captions + natural TTS voice assignments
+ * - Full fallback support with Gemini 2.0 Flash integration
  */
 export default function Room() {
   const location = useLocation();
@@ -25,7 +30,7 @@ export default function Room() {
     return null;
   }
 
-  const { topic, panel, durationMin, language, format, patienceSec } = config;
+  const { topic, panel, durationMin, language, format, patienceSec = 2.5, apiKey = "" } = config;
   const durationSec = durationMin * 60;
 
   // State
@@ -36,20 +41,28 @@ export default function Room() {
   const [micStatus, setMicStatus] = useState("ok"); // ok | denied | unsupported
   const [online, setOnline] = useState(navigator.onLine);
   const [interimText, setInterimText] = useState("");
+  const [bufferedText, setBufferedText] = useState("");
   const [showCaptions, setShowCaptions] = useState(true);
   const [muted, setMuted] = useState(false);
   const [textInput, setTextInput] = useState("");
   const [nudgeVisible, setNudgeVisible] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [moderatorHasOpened, setModeratorHasOpened] = useState(false);
+  const [holdingFloor, setHoldingFloor] = useState(false);
+  const [isStudentSpeaking, setIsStudentSpeaking] = useState(false);
   const [error, setError] = useState(null);
 
   // Refs
   const turnIdRef = useRef(0);
   const transcriptRef = useRef([]);
   const phaseRef = useRef("opening");
+  const moderatorHasOpenedRef = useRef(false);
   const lastStudentSpeechRef = useRef(null);
   const patienceTimerRef = useRef(null);
+  const silenceTimerRef = useRef(null);
+  const speechBufferRef = useRef("");
+  const holdingFloorRef = useRef(false);
+  const isStudentSpeakingRef = useRef(false);
   const sttRef = useRef(null);
   const isProcessingRef = useRef(false);
   const turnCountRef = useRef(0);
@@ -58,6 +71,8 @@ export default function Room() {
   // Keep refs in sync
   useEffect(() => { transcriptRef.current = transcript; }, [transcript]);
   useEffect(() => { phaseRef.current = phase; }, [phase]);
+  useEffect(() => { holdingFloorRef.current = holdingFloor; }, [holdingFloor]);
+  useEffect(() => { isStudentSpeakingRef.current = isStudentSpeaking; }, [isStudentSpeaking]);
 
   // Online/offline detection
   useEffect(() => {
@@ -71,88 +86,64 @@ export default function Room() {
     };
   }, []);
 
-  // Init voices
+  // Init natural voices
   useEffect(() => {
     initVoices(panel, () => {});
     setOnSpeakingChange((name) => setSpeaking(name));
-  }, []);
+  }, [panel]);
 
-  // Start STT
-  useEffect(() => {
-    if (muted) {
-      stopSTT();
-      return;
-    }
-
-    const lang = language === "hinglish" ? "hi-IN" : "en-US";
-    const stt = startSTT({
-      lang,
-      onInterim: (text) => {
-        setInterimText(text);
-        // If student speaks while AI is speaking → interrupt
-        if (speaking && text.length > 5) {
-          handleInterruption();
-        }
-      },
-      onFinal: (text) => {
-        setInterimText("");
-        if (text.trim()) {
-          addStudentTurn(text.trim());
-        }
-      },
-      onError: (err) => {
-        if (err === "denied") setMicStatus("denied");
-        else if (err === "unsupported") setMicStatus("unsupported");
-        else setError(`Mic error: ${err}`);
-      },
-    });
-
-    sttRef.current = stt;
-    if (!stt.isSupported) setMicStatus("unsupported");
-
-    return () => stt.stop();
-  }, [muted, language]);
-
-  // Kick off the opening moderator turn
-  useEffect(() => {
-    if (phase === "opening" && transcript.length === 0) {
-      requestAITurn();
-    }
-  }, []);
-
-  // Handle phase transitions from timer
-  const handleTimerTick = useCallback((elapsed, remaining) => {
-    setElapsedSec(elapsed);
-    const newPhase = getPhase(elapsed, durationSec, moderatorHasOpened);
-    if (newPhase !== phaseRef.current) {
-      setPhase(newPhase);
-      if (newPhase === "closing") {
-        // Request closing moderator turn
-        setTimeout(() => requestAITurn(), 500);
-      }
-    }
-
-    // Nudge check
-    if (shouldShowNudge(lastStudentSpeechRef.current, elapsed, newPhase)) {
-      setNudgeVisible(true);
-    }
-  }, [durationSec, moderatorHasOpened]);
-
-  const handleTimerEnd = useCallback(() => {
-    setPhase("ended");
+  // Handle interruption
+  const handleInterruption = useCallback(() => {
     cancelTTS();
-    stopSTT();
-    // Navigate to report
-    setTimeout(() => {
-      navigate("/report", {
-        state: { topic, transcript: transcriptRef.current },
-      });
-    }, 1500);
-  }, [topic, navigate]);
+    const newId = bumpTurnId();
+    turnIdRef.current = newId;
+    clearTimeout(patienceTimerRef.current);
+    isProcessingRef.current = false;
+    setSpeaking(null);
+    setThinking(false);
+  }, []);
 
-  // ---------- Turn management ----------
+  // Commit accumulated student speech to transcript
+  const commitStudentSpeech = useCallback(() => {
+    const fullText = speechBufferRef.current.trim();
+    if (!fullText) return;
 
+    speechBufferRef.current = "";
+    setBufferedText("");
+    setInterimText("");
+    setIsStudentSpeaking(false);
+    clearTimeout(silenceTimerRef.current);
+
+    const now = (Date.now() - startTimeRef.current) / 1000;
+    lastStudentSpeechRef.current = now;
+    setNudgeVisible(false);
+
+    const turnId = `t${++turnCountRef.current}`;
+    const newTurn = {
+      id: turnId,
+      speaker: "Student",
+      text: fullText,
+      started_at: Math.max(0, now - (fullText.split(" ").length * 0.35)),
+      ended_at: now,
+    };
+
+    setTranscript((prev) => [...prev, newTurn]);
+
+    // Schedule AI response after a respectful pause
+    clearTimeout(patienceTimerRef.current);
+    patienceTimerRef.current = setTimeout(() => {
+      requestAITurn();
+    }, Math.max(1200, patienceSec * 600));
+  }, [patienceSec]);
+
+  // Add student turn directly (e.g. from text fallback)
   const addStudentTurn = useCallback((text) => {
+    speechBufferRef.current = "";
+    setBufferedText("");
+    setInterimText("");
+    setIsStudentSpeaking(false);
+    clearTimeout(silenceTimerRef.current);
+
     const now = (Date.now() - startTimeRef.current) / 1000;
     lastStudentSpeechRef.current = now;
     setNudgeVisible(false);
@@ -162,30 +153,23 @@ export default function Room() {
       id: turnId,
       speaker: "Student",
       text,
-      started_at: now - (text.split(" ").length * 0.3), // estimate
+      started_at: Math.max(0, now - (text.split(" ").length * 0.35)),
       ended_at: now,
     };
 
     setTranscript((prev) => [...prev, newTurn]);
 
-    // Schedule AI response after patience delay
     clearTimeout(patienceTimerRef.current);
     patienceTimerRef.current = setTimeout(() => {
       requestAITurn();
-    }, patienceSec * 1000);
-  }, [patienceSec]);
-
-  const handleInterruption = useCallback(() => {
-    cancelTTS();
-    const newId = bumpTurnId();
-    turnIdRef.current = newId;
-    clearTimeout(patienceTimerRef.current);
-    setSpeaking(null);
+    }, 1200);
   }, []);
 
+  // Request next AI turn
   const requestAITurn = useCallback(async () => {
     if (isProcessingRef.current) return;
     if (phaseRef.current === "ended") return;
+    if (holdingFloorRef.current) return; // Don't interrupt student holding floor
 
     isProcessingRef.current = true;
     setThinking(true);
@@ -193,7 +177,6 @@ export default function Room() {
 
     const myTurnId = getTurnId();
 
-    // Build request
     const lastSpeaker = transcriptRef.current.length > 0
       ? transcriptRef.current[transcriptRef.current.length - 1].speaker
       : "Moderator";
@@ -210,12 +193,13 @@ export default function Room() {
         speaker: t.speaker,
         text: t.text,
       })),
+      api_key: apiKey || localStorage.getItem("gd_arena_gemini_key") || "",
     };
 
     try {
       const result = await fetchTurn(payload);
 
-      // Check if turn is still current
+      // Check if turn was cancelled while in flight
       if (isTurnStale(myTurnId)) {
         setThinking(false);
         isProcessingRef.current = false;
@@ -229,32 +213,40 @@ export default function Room() {
         speaker: result.speaker,
         text: result.text,
         started_at: now,
-        ended_at: now + (result.text.split(" ").length * 0.3),
+        ended_at: now + (result.text.split(" ").length * 0.35),
       };
 
       setTranscript((prev) => [...prev, newTurn]);
       setThinking(false);
 
-      // Track if moderator has opened
-      if (phaseRef.current === "opening" && result.speaker === "Moderator") {
+      // Mark moderator opening complete permanent
+      if (result.speaker === "Moderator") {
+        moderatorHasOpenedRef.current = true;
         setModeratorHasOpened(true);
-        setPhase("middle");
+        if (phaseRef.current === "opening") {
+          phaseRef.current = "middle";
+          setPhase("middle");
+        }
       }
 
-      // Speak the line (TTS)
+      // Speak aloud via TTS
       await speak(result.speaker, result.text, null, null);
 
       isProcessingRef.current = false;
 
-      // If still current and student hasn't spoken, continue the discussion
+      // Generous conversational pause before next AI turn (allows student to speak naturally)
       if (!isTurnStale(myTurnId) && phaseRef.current !== "ended") {
-        // Auto-continue: AI talks to each other
         clearTimeout(patienceTimerRef.current);
         patienceTimerRef.current = setTimeout(() => {
-          if (phaseRef.current !== "ended") {
+          if (
+            phaseRef.current !== "ended" &&
+            !holdingFloorRef.current &&
+            !speechBufferRef.current.trim() &&
+            !isStudentSpeakingRef.current
+          ) {
             requestAITurn();
           }
-        }, patienceSec * 1000 + 500);
+        }, Math.max(5000, patienceSec * 1000 + 2000));
       }
     } catch (err) {
       console.error("Turn error:", err);
@@ -262,17 +254,129 @@ export default function Room() {
       setThinking(false);
       isProcessingRef.current = false;
 
-      // Retry once after 2s
       setTimeout(() => {
-        if (!isTurnStale(myTurnId)) {
+        if (!isTurnStale(myTurnId) && phaseRef.current !== "ended") {
           requestAITurn();
         }
-      }, 2000);
+      }, 2500);
     }
-  }, [topic, format, language, panel, patienceSec]);
+  }, [topic, format, language, panel, patienceSec, apiKey]);
 
-  // ---------- Text input fallback ----------
+  // STT initialization with robust debouncing
+  useEffect(() => {
+    if (muted) {
+      stopSTT();
+      return;
+    }
 
+    const lang = language === "hinglish" ? "hi-IN" : "en-US";
+    const stt = startSTT({
+      lang,
+      onInterim: (text) => {
+        setInterimText(text);
+        setIsStudentSpeaking(true);
+
+        // Interrupt active AI if student starts speaking
+        if (speaking && text.trim().length > 3) {
+          handleInterruption();
+        }
+
+        // Student is speaking -> pause AI auto timers
+        clearTimeout(patienceTimerRef.current);
+        clearTimeout(silenceTimerRef.current);
+      },
+      onFinal: (text) => {
+        const clean = text.trim();
+        if (clean) {
+          // Accumulate chunk into speech buffer
+          const updated = (speechBufferRef.current ? speechBufferRef.current + " " + clean : clean).trim();
+          speechBufferRef.current = updated;
+          setBufferedText(updated);
+          setInterimText("");
+          setIsStudentSpeaking(true);
+
+          // Clear any AI speech
+          clearTimeout(patienceTimerRef.current);
+
+          // If not manually holding floor, wait for natural silence before committing turn
+          if (!holdingFloorRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = setTimeout(() => {
+              commitStudentSpeech();
+            }, Math.max(2500, patienceSec * 1000));
+          }
+        }
+      },
+      onError: (err) => {
+        if (err === "denied") setMicStatus("denied");
+        else if (err === "unsupported") setMicStatus("unsupported");
+        else setError(`Mic error: ${err}`);
+      },
+    });
+
+    sttRef.current = stt;
+    if (!stt.isSupported) setMicStatus("unsupported");
+
+    return () => {
+      stt.stop();
+      clearTimeout(silenceTimerRef.current);
+      clearTimeout(patienceTimerRef.current);
+    };
+  }, [muted, language, patienceSec, speaking, handleInterruption, commitStudentSpeech]);
+
+  // Initial Moderator Opening Call
+  useEffect(() => {
+    if (phase === "opening" && transcript.length === 0) {
+      requestAITurn();
+    }
+  }, []);
+
+  // Timer Tick
+  const handleTimerTick = useCallback((elapsed, remaining) => {
+    setElapsedSec(elapsed);
+    if (!moderatorHasOpenedRef.current) return;
+
+    const newPhase = getPhase(elapsed, durationSec, true);
+    if (newPhase !== phaseRef.current) {
+      phaseRef.current = newPhase;
+      setPhase(newPhase);
+      if (newPhase === "closing") {
+        setTimeout(() => requestAITurn(), 600);
+      }
+    }
+
+    if (shouldShowNudge(lastStudentSpeechRef.current, elapsed, phaseRef.current)) {
+      setNudgeVisible(true);
+    }
+  }, [durationSec, requestAITurn]);
+
+  const handleTimerEnd = useCallback(() => {
+    setPhase("ended");
+    cancelTTS();
+    stopSTT();
+    navigate("/report", {
+      state: { topic, transcript: transcriptRef.current, apiKey },
+    });
+  }, [topic, navigate, apiKey]);
+
+  // Floor toggling
+  const toggleHoldFloor = () => {
+    handleInterruption();
+    const nextState = !holdingFloor;
+    setHoldingFloor(nextState);
+    holdingFloorRef.current = nextState;
+
+    if (!nextState && speechBufferRef.current.trim()) {
+      commitStudentSpeech();
+    }
+  };
+
+  // Submit speech buffer immediately
+  const handleSendBuffer = () => {
+    commitStudentSpeech();
+  };
+
+  // Text input fallback
   const handleTextSubmit = useCallback((e) => {
     e.preventDefault();
     if (!textInput.trim()) return;
@@ -286,22 +390,33 @@ export default function Room() {
     stopSTT();
     setPhase("ended");
     navigate("/report", {
-      state: { topic, transcript: transcriptRef.current },
+      state: { topic, transcript: transcriptRef.current, apiKey },
     });
-  }, [topic, navigate]);
-
-  // ---------- Render ----------
+  }, [topic, navigate, apiKey]);
 
   return (
     <div className="h-screen flex flex-col bg-arena-bg">
       {/* Header bar */}
       <div className="flex items-center justify-between px-6 py-3 bg-arena-surface border-b border-arena-border">
-        <h1 className="text-lg font-bold bg-gradient-to-r from-arena-accent to-arena-accent-glow bg-clip-text text-transparent">
-          GD Arena
-        </h1>
-        <p className="text-sm text-arena-text-muted max-w-md truncate text-center flex-1 mx-4">
+        <div className="flex items-center gap-3">
+          <h1 className="text-lg font-bold bg-gradient-to-r from-arena-accent to-arena-accent-glow bg-clip-text text-transparent">
+            GD Arena
+          </h1>
+          {apiKey ? (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-arena-success/20 text-arena-success border border-arena-success/30 font-medium">
+              Gemini 2.0 Flash
+            </span>
+          ) : (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-arena-warning/20 text-arena-warning border border-arena-warning/30 font-medium">
+              Practice Mode
+            </span>
+          )}
+        </div>
+
+        <p className="text-sm text-arena-text-muted max-w-md truncate text-center flex-1 mx-4 font-medium">
           {topic}
         </p>
+
         <Timer
           durationSec={durationSec}
           phase={phase}
@@ -327,9 +442,56 @@ export default function Room() {
         ))}
         <ParticipantCard
           name="Student"
-          isSpeaking={!!interimText}
+          isSpeaking={isStudentSpeaking || !!bufferedText || !!interimText}
           isStudent
         />
+      </div>
+
+      {/* Dynamic Status Notification Bar */}
+      <div className="px-6 py-2 bg-arena-surface/80 border-b border-arena-border/50 flex items-center justify-between text-xs">
+        <div className="flex items-center gap-3">
+          {isStudentSpeaking || bufferedText ? (
+            <div className="flex items-center gap-2 text-arena-accent-glow font-semibold animate-pulse">
+              <span className="w-2.5 h-2.5 rounded-full bg-arena-accent inline-block animate-ping" />
+              <span>You have the floor — listening...</span>
+            </div>
+          ) : speaking ? (
+            <div className="flex items-center gap-2 text-arena-info font-medium">
+              <span>🗣️ {speaking} is speaking</span>
+            </div>
+          ) : thinking ? (
+            <div className="flex items-center gap-2 text-arena-accent font-medium">
+              <span>🤔 AI participants formulating response...</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-arena-success font-medium">
+              <span>💬 Floor is open — share your point or hold floor below</span>
+            </div>
+          )}
+        </div>
+
+        {/* Floor Control Buttons */}
+        <div className="flex items-center gap-2">
+          {bufferedText && (
+            <button
+              onClick={handleSendBuffer}
+              className="px-3 py-1 rounded-lg bg-arena-accent text-white text-xs font-semibold hover:bg-arena-accent/80 transition-all cursor-pointer shadow-sm animate-fade-in-up"
+            >
+              ✓ Done Speaking (Submit Turn)
+            </button>
+          )}
+
+          <button
+            onClick={toggleHoldFloor}
+            className={`px-3 py-1 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
+              holdingFloor
+                ? "bg-arena-accent text-white border-arena-accent shadow-md shadow-arena-accent/30"
+                : "bg-arena-surface-2 text-arena-text-muted border-arena-border hover:border-arena-accent"
+            }`}
+          >
+            {holdingFloor ? "✋ Holding Floor (Click when Done)" : "✋ Hold Floor"}
+          </button>
+        </div>
       </div>
 
       {/* Error banner */}
@@ -349,14 +511,14 @@ export default function Room() {
       {/* Nudge */}
       {nudgeVisible && (
         <div className="mx-6 mt-2 p-3 rounded-xl bg-arena-info/10 border border-arena-info/30 text-sm text-arena-info animate-fade-in-up">
-          💡 You haven't spoken for 3 minutes. Look for an opening to share your thoughts!
+          💡 You haven't spoken in a few minutes. Find an opening to build on recent points!
         </div>
       )}
 
       {/* Transcript */}
       <div className="flex-1 min-h-0 flex flex-col mx-6 my-3 glass-card overflow-hidden">
         <div className="px-4 py-2 border-b border-arena-border/50 flex items-center justify-between">
-          <span className="text-sm font-medium text-arena-text-muted">Transcript</span>
+          <span className="text-sm font-medium text-arena-text-muted">Live Discussion Transcript</span>
           {thinking && (
             <div className="flex items-center gap-2 text-xs text-arena-accent">
               <div className="flex gap-1">
@@ -364,13 +526,14 @@ export default function Room() {
                 <div className="thinking-dot" />
                 <div className="thinking-dot" />
               </div>
-              AI thinking...
+              Thinking...
             </div>
           )}
         </div>
         <TranscriptPanel
           transcript={transcript}
           interimText={interimText}
+          bufferedText={bufferedText}
           showCaptions={showCaptions}
         />
       </div>
@@ -380,30 +543,31 @@ export default function Room() {
         {/* Status row */}
         <div className="flex items-center gap-4 mb-3 text-xs text-arena-text-muted">
           <span className={micStatus === "ok" ? "text-arena-success" : "text-arena-danger"}>
-            {micStatus === "ok" ? "🎤 Mic ok" : micStatus === "denied" ? "🚫 Mic denied" : "⚠️ Mic unsupported"}
+            {micStatus === "ok" ? "🎤 Mic Active" : micStatus === "denied" ? "🚫 Mic Denied" : "⚠️ Mic Unsupported"}
           </span>
           <span className={online ? "text-arena-success" : "text-arena-danger"}>
             {online ? "🟢 Connected" : "🔴 Offline"}
           </span>
           <span className="text-arena-text-muted">
-            {speaking ? `🗣️ ${speaking} speaking` : thinking ? "🤔 AI thinking" : "💤 AI idle"}
+            Patience: {patienceSec}s
           </span>
         </div>
 
         {/* Controls row */}
         <div className="flex items-center gap-3">
-          {/* Text input (always present as fallback) */}
+          {/* Text input fallback */}
           <form onSubmit={handleTextSubmit} className="flex-1 flex gap-2">
             <input
               type="text"
               value={textInput}
               onChange={(e) => setTextInput(e.target.value)}
-              placeholder={micStatus !== "ok" ? "Type to participate..." : "Type if mic fails..."}
+              placeholder={micStatus !== "ok" ? "Type your point here..." : "Type if mic is noisy or unavailable..."}
               className="flex-1 px-4 py-2.5 rounded-xl bg-arena-surface-2 border border-arena-border text-arena-text text-sm placeholder-arena-text-muted/50 focus:outline-none focus:border-arena-accent transition-colors"
             />
             <button
               type="submit"
-              className="px-4 py-2.5 rounded-xl bg-arena-accent text-white text-sm font-medium hover:bg-arena-accent/80 transition-colors cursor-pointer"
+              disabled={!textInput.trim()}
+              className="px-4 py-2.5 rounded-xl bg-arena-accent text-white text-sm font-medium hover:bg-arena-accent/80 disabled:opacity-40 transition-colors cursor-pointer"
             >
               Send
             </button>
@@ -418,7 +582,7 @@ export default function Room() {
                 : "bg-arena-surface-2 text-arena-text-muted border border-arena-border hover:border-arena-accent"
             }`}
           >
-            {muted ? "Unmute" : "Mute"}
+            {muted ? "Unmute Mic" : "Mute Mic"}
           </button>
 
           <button

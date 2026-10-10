@@ -139,19 +139,27 @@ Return ONLY valid JSON in this exact format:
 
 async def get_next_turn(topic: str, format: str, language: str,
                          panel: list[str], phase: str, last_speaker: str,
-                         transcript: list[dict]) -> dict:
+                         transcript: list[dict], api_key: str = "") -> dict:
     """Get the next turn from the LLM with guards, timeout, retry, and fallback."""
 
-    # Opening phase: Moderator speaks if first turn
-    if phase == "opening" and (not transcript or last_speaker != "Moderator"):
+    has_moderator_spoken = any(t.get("speaker") == "Moderator" for t in transcript)
+    effective_phase = phase
+
+    # If moderator has already spoken, opening phase is COMPLETE. Never repeat opening.
+    if has_moderator_spoken and effective_phase == "opening":
+        effective_phase = "middle"
+
+    # Opening phase: Moderator speaks exactly ONCE at the start
+    if effective_phase == "opening" and not has_moderator_spoken:
         return {
             "speaker": "Moderator",
             "text": get_fallback_line("Moderator", "opening", language, topic),
             "intent": "redirect",
         }
 
-    # Closing phase: Moderator wraps up
-    if phase == "closing" and last_speaker != "Moderator":
+    # Closing phase: Moderator wraps up once
+    closing_mod_spoken = any(t.get("speaker") == "Moderator" and t.get("phase") == "closing" for t in transcript)
+    if effective_phase == "closing" and last_speaker != "Moderator" and not closing_mod_spoken:
         return {
             "speaker": "Moderator",
             "text": get_fallback_line("Moderator", "closing", language, topic),
@@ -161,28 +169,33 @@ async def get_next_turn(topic: str, format: str, language: str,
     forced = pick_forced_speaker(panel, last_speaker, transcript)
     turn_idx = len(transcript)
 
+    # Determine if API key is provided or configured
+    active_key = (api_key or os.getenv("GEMINI_API_KEY", "")).strip()
+    key_available = bool(active_key and active_key != "your-api-key-here" and len(active_key) > 10)
+
     # If API key is configured, call LLM
-    if IS_KEY_CONFIGURED:
-        system_parts = []
-        for name in panel:
-            p = PERSONALITIES.get(name, {})
-            system_parts.append(f"{name}: {p.get('system_prompt', '')}")
-        system_parts.append(f"Moderator: {PERSONALITIES['Moderator']['system_prompt']}")
-        system_prompt = "\n\n".join(system_parts)
-
-        user_prompt = build_turn_prompt(
-            topic, format, language, panel, phase,
-            last_speaker, transcript, forced
-        )
-
+    if key_available:
         try:
+            genai.configure(api_key=active_key)
+            system_parts = []
+            for name in panel:
+                p = PERSONALITIES.get(name, {})
+                system_parts.append(f"{name}: {p.get('system_prompt', '')}")
+            system_parts.append(f"Moderator: {PERSONALITIES['Moderator']['system_prompt']}")
+            system_prompt = "\n\n".join(system_parts)
+
+            user_prompt = build_turn_prompt(
+                topic, format, language, panel, effective_phase,
+                last_speaker, transcript, forced
+            )
+
             model = genai.GenerativeModel(
                 FAST_MODEL,
                 system_instruction=system_prompt,
                 generation_config=genai.GenerationConfig(
                     response_mime_type="application/json",
                     max_output_tokens=120,
-                    temperature=0.9,
+                    temperature=0.85,
                 ),
             )
 
@@ -199,9 +212,14 @@ async def get_next_turn(topic: str, format: str, language: str,
                     line = result.get("text", "")
                     intent = result.get("intent", "extend")
 
-                    speaker = validate_speaker(speaker, panel, last_speaker, phase)
+                    speaker = validate_speaker(speaker, panel, last_speaker, effective_phase)
+                    # Never allow Moderator to speak standard conversational turns in middle
+                    if effective_phase == "middle" and speaker == "Moderator":
+                        candidates = [p for p in panel if p != last_speaker]
+                        speaker = candidates[0] if candidates else panel[0]
+
                     if not line or len(line.strip()) < 3:
-                        line = get_fallback_line(speaker, phase, language, topic, turn_idx)
+                        line = get_fallback_line(speaker, effective_phase, language, topic, turn_idx)
 
                     return {
                         "speaker": speaker,
@@ -227,11 +245,24 @@ async def get_next_turn(topic: str, format: str, language: str,
     if forced:
         fallback_speaker = forced
     else:
-        candidates = [p for p in panel if p != last_speaker]
+        candidates = [p for p in panel if p != last_speaker and p != "Moderator"]
         fallback_speaker = candidates[0] if candidates else panel[0]
+
+    # Context-aware fallback if student just spoke
+    fallback_text = get_fallback_line(fallback_speaker, effective_phase, language, topic, turn_idx)
+    if last_speaker == "Student":
+        student_responses = {
+            "Aarav": "I see your point about human roles, but in high-stakes industries, businesses will prioritize automation efficiency over sentiment.",
+            "Meera": "That's an important angle. Looking at the data, companies aren't just replacing workers; they are shifting human roles toward supervision and high-level strategy.",
+            "Kabir": "Building on what you said, the real dilemma isn't whether jobs change, but whether we are educating the next generation to adapt fast enough.",
+            "Riya": "I really like that perspective. Automation handles routine logic, which frees human beings to focus on creative problem solving and empathy.",
+            "Dev": "That's a very valid perspective. It actually reminds me of how computing was feared in the 80s, but it ended up opening massive new sectors.",
+        }
+        if fallback_speaker in student_responses:
+            fallback_text = student_responses[fallback_speaker]
 
     return {
         "speaker": fallback_speaker,
-        "text": get_fallback_line(fallback_speaker, phase, language, topic, turn_idx),
+        "text": fallback_text,
         "intent": "extend",
     }
