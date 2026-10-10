@@ -1,0 +1,189 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+/* GD Arena Design System */
+
+@theme {
+  /* Colors */
+  --color-arena-bg: #0a0a1a;
+  --color-arena-surface: #12122a;
+  --color-arena-surface-2: #1a1a3a;
+  --color-arena-border: #2a2a4a;
+  --color-arena-text: #e8e8f0;
+  --color-arena-text-muted: #8888aa;
+  --color-arena-accent: #6c5ce7;
+  --color-arena-accent-glow: #a78bfa;
+  --color-arena-success: #00d4aa;
+  --color-arena-warning: #fbbf24;
+  --color-arena-danger: #ef4444;
+  --color-arena-info: #38bdf8;
+  
+  /* Participant Colors */
+  --color-p-aarav: #ff6b6b;
+  --color-p-meera: #4ecdc4;
+  --color-p-kabir: #a78bfa;
+  --color-p-riya: #fbbf24;
+  --color-p-dev: #38bdf8;
+  --color-p-moderator: #94a3b8;
+  --color-p-student: #6c5ce7;
+}
+
+/* Global Styles */
+body {
+  background-color: var(--color-arena-bg);
+  color: var(--color-arena-text);
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Animations */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 5px currentColor; }
+  50% { box-shadow: 0 0 20px currentColor, 0 0 40px currentColor; }
+}
+
+@keyframes speaking-wave {
+  0%, 100% { transform: scaleY(0.4); }
+  50% { transform: scaleY(1); }
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes thinking-dots {
+  0%, 20% { opacity: 0.2; }
+  50% { opacity: 1; }
+  80%, 100% { opacity: 0.2; }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.4s ease-out;
+}
+
+.animate-slide-in {
+  animation: slide-in 0.3s ease-out;
+}
+
+/* Glass morphism card */
+.glass-card {
+  background: linear-gradient(135deg, rgba(26, 26, 58, 0.8), rgba(18, 18, 42, 0.9));
+  border: 1px solid rgba(108, 92, 231, 0.15);
+  border-radius: 16px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.glass-card-hover:hover {
+  border-color: rgba(108, 92, 231, 0.4);
+  box-shadow: 0 8px 32px rgba(108, 92, 231, 0.1);
+  transform: translateY(-2px);
+  transition: all 0.3s ease;
+}
+
+/* Chip buttons */
+.chip {
+  padding: 8px 16px;
+  border-radius: 9999px;
+  border: 1px solid var(--color-arena-border);
+  background: var(--color-arena-surface);
+  color: var(--color-arena-text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0.875rem;
+}
+
+.chip:hover {
+  border-color: var(--color-arena-accent);
+  color: var(--color-arena-text);
+}
+
+.chip.active {
+  background: linear-gradient(135deg, var(--color-arena-accent), #8b5cf6);
+  border-color: var(--color-arena-accent);
+  color: white;
+  box-shadow: 0 0 15px rgba(108, 92, 231, 0.3);
+}
+
+/* Speaking indicator */
+.speaking-indicator {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 16px;
+}
+
+.speaking-bar {
+  width: 3px;
+  background: currentColor;
+  border-radius: 2px;
+  animation: speaking-wave 0.8s ease-in-out infinite;
+}
+
+.speaking-bar:nth-child(2) { animation-delay: 0.1s; }
+.speaking-bar:nth-child(3) { animation-delay: 0.2s; }
+.speaking-bar:nth-child(4) { animation-delay: 0.3s; }
+
+/* Thinking dots */
+.thinking-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-arena-accent);
+  animation: thinking-dots 1.4s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-arena-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-arena-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-arena-accent);
+}
+
+/* Score bar */
+.score-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--color-arena-surface);
+  overflow: hidden;
+}
+
+.score-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.8s ease-out;
+}
+
+/* Transcript line styling */
+.transcript-line {
+  padding: 8px 12px;
+  border-radius: 8px;
+  animation: fade-in-up 0.3s ease-out;
+}
+
+.transcript-line:hover {
+  background: rgba(108, 92, 231, 0.05);
+}
+
+
