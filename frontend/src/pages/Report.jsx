@@ -11,18 +11,9 @@ import {
   AlertCircle,
   Award,
   ChevronRight,
-  TrendingUp,
-  Shield,
-  Headphones,
-  Scale,
-  Zap,
-  Flame,
-  Trophy,
-  BookOpen,
 } from "lucide-react";
 import { PARTICIPANT_INFO } from "../lib/controller";
 import { fetchReport } from "../lib/api";
-import { recordSession, ALL_BADGES, LEVELS } from "../lib/growthProfile";
 
 /**
  * Report page – Ink & Signal Studio Palette.
@@ -31,7 +22,7 @@ import { recordSession, ALL_BADGES, LEVELS } from "../lib/growthProfile";
  *   1. Speaking time and participation balance
  *   2. Filler words analysis ("umm", "actually", "like")
  *   3. Clarity, structure, and relevance of arguments (collaborative vs combative)
- *   4. Unique twist: Exactly what to improve in your next GD (Tactical Action Playbook)
+ *   4. Exactly what to improve in your next GD (Action Playbook)
  * - Talk share stacked horizontal bar (% + turns + words + performance rating out of 10)
  * - 7 Structured placement GD feedback cards with clickable quote chips that jump to transcript
  * - Embedded transcript with highlighted jumping
@@ -45,7 +36,6 @@ export default function Report() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [highlightedTurnId, setHighlightedTurnId] = useState(null);
-  const [growthData, setGrowthData] = useState(null);
 
   useEffect(() => {
     if (!transcript) {
@@ -58,27 +48,6 @@ export default function Report() {
         const activeKey = apiKey || localStorage.getItem("gd_arena_gemini_key") || "";
         const data = await fetchReport({ topic, transcript, api_key: activeKey });
         setReport(data);
-
-        // Process student communication skill profile for Personal Growth Journey
-        const studentOverall = data?.metrics?.speakers?.find((s) => s.speaker === "Student")?.score || 7.5;
-        const studentScores = {
-          confidence: Number(Math.min(10, Math.max(5, studentOverall - 0.2 + (data?.coach?.argument_clarity?.is_combative ? -0.5 : 0.4))).toFixed(1)),
-          clarity: Number((data?.coach?.argument_clarity?.score || 7.5).toFixed(1)),
-          listening: Number(Math.min(10, Math.max(5, studentOverall + (data?.coach?.argument_clarity?.is_collaborative ? 0.6 : -0.2))).toFixed(1)),
-          reasoning: Number(Math.min(10, Math.max(5, (data?.categories?.find((c) => c.category === "idea_quality")?.score_num || studentOverall))).toFixed(1)),
-          overall: Number(studentOverall.toFixed(1)),
-        };
-
-        const growthResult = recordSession({
-          topic,
-          scores: studentScores,
-          sharePct: data?.coach?.speaking_time?.share_pct || 20,
-          fillerRate: data?.coach?.filler_words?.rate_per_100_words || 0,
-          totalSeconds: data?.coach?.speaking_time?.student_seconds || 60,
-          studentTurns: data?.coach?.speaking_time?.student_turns || 3,
-        });
-
-        setGrowthData(growthResult);
       } catch (err) {
         console.error("Report error:", err);
         setError("Failed to generate report. Please try again.");
@@ -497,299 +466,6 @@ export default function Report() {
           </div>
         </div>
       </section>
-
-      {/* ========================================================
-          PERSONAL GROWTH JOURNEY (MEASURING PERSONAL IMPROVEMENT)
-         ======================================================== */}
-      {growthData && (
-        <section className="space-y-4 animate-fade-in-up">
-          {/* Header Banner */}
-          <div className="surface-card p-5 sm:p-6 border-l-4 border-l-meera space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-meera/15 border border-meera/40 flex items-center justify-center text-meera">
-                  <TrendingUp className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-base sm:text-lg font-heading font-bold text-ink">
-                      Personal Growth Journey
-                    </h2>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-meera/15 border border-meera/40 text-meera font-bold uppercase tracking-wider">
-                      Level {growthData.profile.level}: {growthData.profile.title}
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted mt-0.5">
-                    Your communication skill profile — tracking individual mastery discussion by discussion
-                  </p>
-                </div>
-              </div>
-
-              {/* Unique Twist Badge */}
-              <div className="px-3 py-1.5 rounded-lg bg-raised border border-border text-xs font-mono flex items-center gap-2 shrink-0">
-                <Sparkles className="w-3.5 h-3.5 text-accent" />
-                <span className="text-muted">Unique Twist:</span>
-                <strong className="text-ink font-semibold">Measuring Personal Improvement, Not Ranking Students</strong>
-              </div>
-            </div>
-
-            {/* Level & XP Progression Bar */}
-            <div className="p-4 rounded-xl bg-surface border border-border space-y-2.5">
-              <div className="flex items-center justify-between text-xs font-mono">
-                <div className="flex items-center gap-2 text-ink font-semibold">
-                  <Trophy className="w-4 h-4 text-accent" />
-                  <span>Current Rank: {growthData.profile.title} (Level {growthData.profile.level})</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-accent font-bold">+{growthData.sessionXP} XP Earned</span>
-                  <span className="text-border">|</span>
-                  <span className="text-muted">{growthData.profile.xp} / {growthData.profile.nextLevelXP} XP</span>
-                </div>
-              </div>
-              <div className="w-full h-2 rounded-full bg-raised overflow-hidden border border-border">
-                <div
-                  className="h-full bg-gradient-to-r from-meera via-accent to-accent transition-all duration-500 rounded-full"
-                  style={{
-                    width: `${Math.min(100, Math.round((growthData.profile.xp / growthData.profile.nextLevelXP) * 100))}%`,
-                  }}
-                />
-              </div>
-              <div className="flex items-center justify-between text-[11px] text-muted font-mono">
-                <span>{growthData.profile.totalSessions} Discussions Completed</span>
-                <span>{growthData.profile.totalMinutesSpoken} Min Spoken Total</span>
-                <span>Next Rank: Level {Math.min(5, growthData.profile.level + 1)}</span>
-              </div>
-            </div>
-
-            {/* 4 Core Pillars: Confidence, Clarity, Listening, Reasoning */}
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-mono uppercase tracking-wider text-muted flex items-center gap-1.5">
-                  <Target className="w-3.5 h-3.5 text-accent" />
-                  4 Core Communication Pillars (vs Past Performance)
-                </h3>
-                <span className="text-[10px] font-mono text-muted">Scored out of 10</span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                {[
-                  {
-                    name: "Confidence",
-                    score: growthData.profile.currentSkills.confidence,
-                    delta: growthData.deltas.confidence,
-                    icon: Shield,
-                    color: "#C8F545",
-                    desc: "Vocal assertion, steady pace, decisive composure",
-                  },
-                  {
-                    name: "Clarity",
-                    score: growthData.profile.currentSkills.clarity,
-                    delta: growthData.deltas.clarity,
-                    icon: Mic,
-                    color: "#2DD4BF",
-                    desc: "Zero filler words, clean sentence structures",
-                  },
-                  {
-                    name: "Listening",
-                    score: growthData.profile.currentSkills.listening,
-                    delta: growthData.deltas.listening,
-                    icon: Headphones,
-                    color: "#6EA8FF",
-                    desc: "Building on peers, non-interruptive synthesis",
-                  },
-                  {
-                    name: "Reasoning",
-                    score: growthData.profile.currentSkills.reasoning,
-                    delta: growthData.deltas.reasoning,
-                    icon: Sparkles,
-                    color: "#FBBF24",
-                    desc: "Logical depth, structured proof, staying on topic",
-                  },
-                ].map((pillar) => {
-                  const Icon = pillar.icon;
-                  const deltaVal = pillar.delta;
-                  const isPositive = deltaVal > 0;
-                  const isNeutral = deltaVal === 0;
-
-                  return (
-                    <div
-                      key={pillar.name}
-                      className="p-3.5 rounded-xl bg-surface border border-border flex flex-col justify-between space-y-2 hover:bg-raised transition-colors"
-                    >
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-mono font-semibold text-ink flex items-center gap-1.5">
-                            <Icon className="w-3.5 h-3.5" style={{ color: pillar.color }} />
-                            {pillar.name}
-                          </span>
-                          <span
-                            className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${
-                              isPositive
-                                ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
-                                : isNeutral
-                                ? "bg-raised text-muted border border-border"
-                                : "bg-danger/15 text-danger border border-danger/30"
-                            }`}
-                          >
-                            {isPositive ? `▲ +${deltaVal}` : isNeutral ? "● 0.0" : `▼ ${deltaVal}`}
-                          </span>
-                        </div>
-                        <div className="mt-2 flex items-baseline gap-1.5">
-                          <span className="text-2xl font-heading font-bold text-ink">
-                            {pillar.score.toFixed(1)}
-                          </span>
-                          <span className="text-xs font-mono text-muted">/ 10</span>
-                        </div>
-                        <div className="w-full h-1.5 rounded-full bg-raised overflow-hidden mt-1.5 border border-border/60">
-                          <div
-                            className="h-full rounded-full transition-all duration-500"
-                            style={{
-                              width: `${Math.min(100, Math.round(pillar.score * 10))}%`,
-                              backgroundColor: pillar.color,
-                            }}
-                          />
-                        </div>
-                      </div>
-                      <p className="text-[11px] text-muted font-body leading-tight">
-                        {pillar.desc}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Badges & Weekly Challenges Row */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-border">
-              {/* Badges Drawer */}
-              <div className="p-4 rounded-xl bg-surface border border-border space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-mono uppercase tracking-wider text-muted flex items-center gap-1.5">
-                    <Award className="w-3.5 h-3.5 text-accent" />
-                    Unlocked Badges ({growthData.profile.unlockedBadges.length} / {ALL_BADGES.length})
-                  </h4>
-                  <span className="text-[10px] font-mono text-accent">Skill Milestones</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {ALL_BADGES.map((b) => {
-                    const isUnlocked = growthData.profile.unlockedBadges.includes(b.id);
-                    const isNew = growthData.newlyUnlockedBadges?.includes(b.id);
-                    return (
-                      <div
-                        key={b.id}
-                        className={`p-2 rounded-lg border text-xs transition-all flex items-start gap-2 ${
-                          isUnlocked
-                            ? isNew
-                              ? "bg-accent/15 border-accent shadow-[0_0_12px_rgba(200,245,69,0.2)] animate-pulse"
-                              : "bg-raised border-border text-ink"
-                            : "bg-surface/40 border-border/40 opacity-40 text-muted"
-                        }`}
-                      >
-                        <div
-                          className="w-6 h-6 rounded-md flex items-center justify-center shrink-0 text-xs font-bold font-mono"
-                          style={{
-                            backgroundColor: isUnlocked ? "rgba(200,245,69,0.15)" : "#1E2128",
-                            color: isUnlocked ? "#C8F545" : "#9A9CA5",
-                          }}
-                        >
-                          ★
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1">
-                            <span className="font-semibold truncate text-[11px] text-ink">
-                              {b.name}
-                            </span>
-                            {isNew && (
-                              <span className="text-[8px] font-mono px-1 rounded bg-accent text-[#0E0F12] font-bold">
-                                NEW!
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-[10px] text-muted truncate mt-0.5">
-                            {b.description}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Weekly Challenges */}
-              <div className="p-4 rounded-xl bg-surface border border-border space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-mono uppercase tracking-wider text-muted flex items-center gap-1.5">
-                    <Zap className="w-3.5 h-3.5 text-warn" />
-                    Weekly Challenges
-                  </h4>
-                  <span className="text-[10px] font-mono text-muted">Weekly Goal Sprint</span>
-                </div>
-                <div className="space-y-2">
-                  {growthData.profile.weeklyChallenges.map((ch) => (
-                    <div
-                      key={ch.id}
-                      className="p-2.5 rounded-lg bg-raised border border-border flex items-center justify-between gap-3 text-xs"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-ink text-[12px]">{ch.title}</span>
-                          {ch.completed ? (
-                            <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-semibold flex items-center gap-0.5">
-                              <CheckCircle2 className="w-2.5 h-2.5" /> Done
-                            </span>
-                          ) : (
-                            <span className="text-[9px] font-mono text-muted">
-                              {ch.current} / {ch.target}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-[10px] text-muted truncate mt-0.5">
-                          {ch.description}
-                        </p>
-                      </div>
-                      <span className="text-[10px] font-mono font-bold text-accent shrink-0">
-                        +{ch.rewardXP} XP
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Personalized Practice Plan */}
-            <div className="p-4 rounded-xl bg-surface border border-border space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <BookOpen className="w-4 h-4 text-accent" />
-                  <h4 className="text-xs font-mono uppercase tracking-wider text-ink font-semibold">
-                    Personalized Practice Plan — Target: {growthData.weakestPillar} Pillar
-                  </h4>
-                </div>
-                <span className="text-[10px] font-mono text-muted">Tailored to Your Lowest Scored Area</span>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                {growthData.profile.practicePlan.map((plan, idx) => (
-                  <div
-                    key={idx}
-                    className="p-3 rounded-lg bg-raised border border-border space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-accent/15 text-accent font-semibold">
-                        {plan.day}
-                      </span>
-                      <span className="text-[10px] font-mono text-muted">{plan.pillar}</span>
-                    </div>
-                    <h5 className="font-semibold text-xs text-ink">{plan.title}</h5>
-                    <p className="text-[11px] text-muted leading-relaxed font-body">
-                      {plan.action}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
 
       {/* ========================================================
           TALK SHARE & PARTICIPANT RATINGS OUT OF 10
