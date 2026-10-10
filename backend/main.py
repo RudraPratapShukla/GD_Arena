@@ -4,8 +4,21 @@ Stateless server with /health, /turn, and /report endpoints.
 """
 
 import os
+import sys
 import asyncio
 from dotenv import load_dotenv
+
+# Ensure UTF-8 stdout encoding on Windows to prevent charmap UnicodeEncodeErrors
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 load_dotenv()
 
@@ -86,7 +99,7 @@ async def set_api_key_endpoint(req: ApiKeyRequest):
     import google.generativeai as genai
     try:
         genai.configure(api_key=key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-3.8-flash")
         # Quick test
         response = await asyncio.to_thread(model.generate_content, "Say 'OK'")
         if response and response.text:

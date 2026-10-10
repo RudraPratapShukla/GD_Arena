@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { Scale, AlertTriangle, Lightbulb, CheckCircle2 } from "lucide-react";
 import ParticipantCard from "../components/ParticipantCard";
 import TranscriptPanel from "../components/TranscriptPanel";
 import Timer from "../components/Timer";
@@ -68,11 +69,16 @@ export default function Room() {
   const turnCountRef = useRef(0);
   const startTimeRef = useRef(Date.now());
 
-  // Keep refs in sync
-  useEffect(() => { transcriptRef.current = transcript; }, [transcript]);
+  // Keep primitive refs in sync
   useEffect(() => { phaseRef.current = phase; }, [phase]);
   useEffect(() => { holdingFloorRef.current = holdingFloor; }, [holdingFloor]);
   useEffect(() => { isStudentSpeakingRef.current = isStudentSpeaking; }, [isStudentSpeaking]);
+
+  // Synchronous push helper: updates transcriptRef immediately so closures never see stale transcript
+  const pushTurn = useCallback((newTurn) => {
+    transcriptRef.current = [...transcriptRef.current, newTurn];
+    setTranscript(transcriptRef.current);
+  }, []);
 
   // Online/offline detection
   useEffect(() => {
@@ -88,7 +94,7 @@ export default function Room() {
 
   // Init natural voices
   useEffect(() => {
-    initVoices(panel, () => {});
+    initVoices(panel, () => { });
     setOnSpeakingChange((name) => setSpeaking(name));
   }, [panel]);
 
@@ -127,14 +133,15 @@ export default function Room() {
       ended_at: now,
     };
 
-    setTranscript((prev) => [...prev, newTurn]);
+    // Step 2: Push student's final utterance synchronously into transcriptRef BEFORE calling /turn
+    pushTurn(newTurn);
 
     // Schedule AI response after a respectful pause
     clearTimeout(patienceTimerRef.current);
     patienceTimerRef.current = setTimeout(() => {
       requestAITurn();
     }, Math.max(1200, patienceSec * 600));
-  }, [patienceSec]);
+  }, [patienceSec, pushTurn]);
 
   // Add student turn directly (e.g. from text fallback)
   const addStudentTurn = useCallback((text) => {
@@ -157,13 +164,14 @@ export default function Room() {
       ended_at: now,
     };
 
-    setTranscript((prev) => [...prev, newTurn]);
+    // Step 2: Push student utterance synchronously into transcriptRef BEFORE calling /turn
+    pushTurn(newTurn);
 
     clearTimeout(patienceTimerRef.current);
     patienceTimerRef.current = setTimeout(() => {
       requestAITurn();
     }, 1200);
-  }, []);
+  }, [pushTurn]);
 
   // Request next AI turn
   const requestAITurn = useCallback(async () => {
@@ -177,9 +185,11 @@ export default function Room() {
 
     const myTurnId = getTurnId();
 
-    const lastSpeaker = transcriptRef.current.length > 0
-      ? transcriptRef.current[transcriptRef.current.length - 1].speaker
-      : "Moderator";
+    // Step 2: Build payload from transcriptRef. Set last_speaker to real speaker of last turn
+    const lastTurn = transcriptRef.current.length > 0
+      ? transcriptRef.current[transcriptRef.current.length - 1]
+      : null;
+    const lastSpeaker = lastTurn ? lastTurn.speaker : "Moderator";
 
     const payload = {
       topic,
@@ -188,7 +198,8 @@ export default function Room() {
       panel,
       phase: phaseRef.current,
       last_speaker: lastSpeaker,
-      transcript: transcriptRef.current.slice(-6).map((t) => ({
+      // Step 2: Send the last 8 turns as {id, speaker, text}
+      transcript: transcriptRef.current.slice(-8).map((t) => ({
         id: t.id,
         speaker: t.speaker,
         text: t.text,
@@ -198,6 +209,17 @@ export default function Room() {
 
     try {
       const result = await fetchTurn(payload);
+
+      // Step 1: Console.log response source and fallback reason if applicable
+      console.log("[GD Arena /turn reply]", {
+        speaker: result.speaker,
+        source: result.source,
+        fallback_reason: result.fallback_reason,
+        text: result.text,
+      });
+      if (result.source === "fallback") {
+        console.warn(`[GD Arena /turn FALLBACK] Speaker: ${result.speaker}, Reason: ${result.fallback_reason || 'unknown'}`);
+      }
 
       // Check if turn was cancelled while in flight
       if (isTurnStale(myTurnId)) {
@@ -216,7 +238,8 @@ export default function Room() {
         ended_at: now + (result.text.split(" ").length * 0.35),
       };
 
-      setTranscript((prev) => [...prev, newTurn]);
+      // Step 2: Push synchronously into transcriptRef and state
+      pushTurn(newTurn);
       setThinking(false);
 
       // Mark moderator opening complete permanent
@@ -262,6 +285,8 @@ export default function Room() {
     }
   }, [topic, format, language, panel, patienceSec, apiKey]);
 
+  const [sttLang, setSttLang] = useState(language === "hinglish" ? "en-IN" : "en-US");
+
   // STT initialization with robust debouncing
   useEffect(() => {
     if (muted) {
@@ -269,9 +294,8 @@ export default function Room() {
       return;
     }
 
-    const lang = language === "hinglish" ? "hi-IN" : "en-US";
     const stt = startSTT({
-      lang,
+      lang: sttLang,
       onInterim: (text) => {
         setInterimText(text);
         setIsStudentSpeaking(true);
@@ -322,11 +346,11 @@ export default function Room() {
       clearTimeout(silenceTimerRef.current);
       clearTimeout(patienceTimerRef.current);
     };
-  }, [muted, language, patienceSec, speaking, handleInterruption, commitStudentSpeech]);
+  }, [muted, sttLang, patienceSec, speaking, handleInterruption, commitStudentSpeech]);
 
   // Initial Moderator Opening Call
   useEffect(() => {
-    if (phase === "opening" && transcript.length === 0) {
+    if (phaseRef.current === "opening" && transcriptRef.current.length === 0) {
       requestAITurn();
     }
   }, []);
@@ -394,30 +418,101 @@ export default function Room() {
     });
   }, [topic, navigate, apiKey]);
 
+  // Smart Participation Balancer Metrics
+  const balanceMetrics = useMemo(() => {
+    const totalParticipants = panel.length + 1; // panel + Student
+    const idealSharePct = Math.round(100 / totalParticipants);
+
+    const participantStats = {};
+    [...panel, "Student"].forEach((name) => {
+      participantStats[name] = { turns: 0, words: 0, name };
+    });
+
+    let totalWords = 0;
+    transcript.forEach((t) => {
+      if (t.speaker && t.speaker !== "Moderator" && participantStats[t.speaker]) {
+        const words = (t.text || "").trim().split(/\s+/).filter(Boolean).length;
+        participantStats[t.speaker].turns += 1;
+        participantStats[t.speaker].words += words;
+        totalWords += words;
+      }
+    });
+
+    const participantShares = Object.values(participantStats).map((p) => {
+      const share = totalWords > 0 ? Math.round((p.words / totalWords) * 100) : idealSharePct;
+      return {
+        ...p,
+        share,
+        color: PARTICIPANT_INFO[p.name]?.color || "#C8F545",
+        isDominant: share >= 38 && p.turns >= 2,
+        isQuiet: share < Math.round(idealSharePct * 0.55) || p.turns <= 1,
+      };
+    });
+
+    const dominantSpeaker = participantShares.find((p) => p.isDominant);
+    const studentStat = participantShares.find((p) => p.name === "Student") || { turns: 0, share: 0 };
+
+    let avgDeviation = 0;
+    participantShares.forEach((p) => {
+      avgDeviation += Math.abs(p.share - idealSharePct);
+    });
+    avgDeviation = participantShares.length > 0 ? avgDeviation / participantShares.length : 0;
+    const fairOpportunityIndex = Math.max(40, Math.min(100, Math.round(100 - avgDeviation * 1.5)));
+
+    const suggestedPrompt = studentStat.turns === 0
+      ? "What is your perspective on this, Student? State your core point!"
+      : dominantSpeaker
+      ? `What is your perspective on ${dominantSpeaker.name}'s point? Build or counter!`
+      : "What is your perspective on how this impacts individuals and organizations?";
+
+    return {
+      participantShares,
+      dominantSpeaker,
+      studentStat,
+      fairOpportunityIndex,
+      suggestedPrompt,
+      idealSharePct,
+    };
+  }, [transcript, panel]);
+
   return (
-    <div className="h-screen flex flex-col bg-arena-bg">
-      {/* Header bar */}
-      <div className="flex items-center justify-between px-6 py-3 bg-arena-surface border-b border-arena-border">
-        <div className="flex items-center gap-3">
-          <h1 className="text-lg font-bold bg-gradient-to-r from-arena-accent to-arena-accent-glow bg-clip-text text-transparent">
+    <div className="h-screen flex flex-col bg-bg text-ink font-body">
+      {/* Header bar with centered JetBrains Mono timer */}
+      <div className="relative flex items-center justify-between px-6 py-3 bg-surface border-b border-border min-h-[56px]">
+        {/* Left: App Title and Topic */}
+        <div className="flex items-center gap-3 max-w-[35%] truncate">
+          <span className="font-heading font-bold text-ink text-base tracking-tight shrink-0">
             GD Arena
-          </h1>
+          </span>
+          <span className="text-border">|</span>
+          <p className="text-xs text-muted truncate font-medium">
+            {topic}
+          </p>
         </div>
 
-        <p className="text-sm text-arena-text-muted max-w-md truncate text-center flex-1 mx-4 font-medium">
-          {topic}
-        </p>
+        {/* Center: Timer in JetBrains Mono */}
+        <div className="absolute left-1/2 -translate-x-1/2 flex items-center">
+          <Timer
+            durationSec={durationSec}
+            phase={phase}
+            onTick={handleTimerTick}
+            onEnd={handleTimerEnd}
+          />
+        </div>
 
-        <Timer
-          durationSec={durationSec}
-          phase={phase}
-          onTick={handleTimerTick}
-          onEnd={handleTimerEnd}
-        />
+        {/* Right: End Session action */}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleEndGD}
+            className="px-3.5 py-1.5 rounded-lg bg-raised text-danger border border-danger/30 hover:bg-danger/15 text-xs font-medium transition-colors cursor-pointer min-h-[36px]"
+          >
+            End Discussion
+          </button>
+        </div>
       </div>
 
-      {/* Participant cards */}
-      <div className="flex gap-3 px-6 py-4 overflow-x-auto justify-center bg-arena-bg/50 border-b border-arena-border/50">
+      {/* Participant cards row */}
+      <div className="flex gap-3 px-6 py-3 overflow-x-auto justify-center bg-bg border-b border-border">
         <ParticipantCard
           name="Moderator"
           isSpeaking={speaking === "Moderator"}
@@ -439,24 +534,30 @@ export default function Room() {
       </div>
 
       {/* Dynamic Status Notification Bar */}
-      <div className="px-6 py-2 bg-arena-surface/80 border-b border-arena-border/50 flex items-center justify-between text-xs">
+      <div className="px-6 py-2 bg-surface border-b border-border flex items-center justify-between text-xs">
         <div className="flex items-center gap-3">
           {isStudentSpeaking || bufferedText ? (
-            <div className="flex items-center gap-2 text-arena-accent-glow font-semibold animate-pulse">
-              <span className="w-2.5 h-2.5 rounded-full bg-arena-accent inline-block animate-ping" />
+            <div className="flex items-center gap-2 text-accent font-medium">
+              <span className="w-2 h-2 rounded-full bg-accent inline-block animate-ping" />
               <span>You have the floor — listening...</span>
             </div>
           ) : speaking ? (
-            <div className="flex items-center gap-2 text-arena-info font-medium">
-              <span>🗣️ {speaking} is speaking</span>
+            <div className="flex items-center gap-2 text-ink font-medium">
+              <span className="text-muted">Speaking:</span>
+              <span className="font-semibold">{speaking}</span>
             </div>
           ) : thinking ? (
-            <div className="flex items-center gap-2 text-arena-accent font-medium">
-              <span>🤔 AI participants formulating response...</span>
+            <div className="flex items-center gap-2 text-muted font-medium">
+              <div className="flex gap-1 items-center">
+                <div className="thinking-dot" />
+                <div className="thinking-dot" />
+                <div className="thinking-dot" />
+              </div>
+              <span>AI formulating next turn...</span>
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-arena-success font-medium">
-              <span>💬 Floor is open — share your point or hold floor below</span>
+            <div className="flex items-center gap-2 text-success font-medium">
+              <span>● Floor is open — speak naturally or click Hold Floor below</span>
             </div>
           )}
         </div>
@@ -466,7 +567,7 @@ export default function Room() {
           {bufferedText && (
             <button
               onClick={handleSendBuffer}
-              className="px-3 py-1 rounded-lg bg-arena-accent text-white text-xs font-semibold hover:bg-arena-accent/80 transition-all cursor-pointer shadow-sm animate-fade-in-up"
+              className="px-3 py-1.5 rounded-lg bg-accent text-[#0E0F12] text-xs font-semibold hover:opacity-90 transition-all cursor-pointer min-h-[36px] shadow-sm animate-fade-in-up"
             >
               ✓ Done Speaking (Submit Turn)
             </button>
@@ -474,50 +575,159 @@ export default function Room() {
 
           <button
             onClick={toggleHoldFloor}
-            className={`px-3 py-1 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
-              holdingFloor
-                ? "bg-arena-accent text-white border-arena-accent shadow-md shadow-arena-accent/30"
-                : "bg-arena-surface-2 text-arena-text-muted border-arena-border hover:border-arena-accent"
-            }`}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer min-h-[36px] ${holdingFloor
+                ? "bg-accent text-[#0E0F12] border-accent font-semibold"
+                : "bg-surface text-muted border-border hover:bg-raised hover:text-ink"
+              }`}
           >
             {holdingFloor ? "✋ Holding Floor (Click when Done)" : "✋ Hold Floor"}
           </button>
         </div>
       </div>
 
+      {/* ========================================================
+          SMART PARTICIPATION BALANCER (FAIR MODERATOR ENGINE)
+         ======================================================== */}
+      <div className="mx-6 mt-2.5 p-3 rounded-lg bg-surface border border-border shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* Left: Balancer Status & Fair Opportunity Index */}
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-raised border border-accent/40 flex items-center justify-center text-accent shrink-0 shadow-sm">
+              <Scale className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-heading font-bold text-ink tracking-tight">
+                  Smart Participation Balancer
+                </span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-raised border border-accent/30 text-accent font-semibold">
+                  Fair Opportunity: {balanceMetrics.fairOpportunityIndex}%
+                </span>
+                {balanceMetrics.dominantSpeaker ? (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-danger/15 border border-danger/30 text-danger font-semibold flex items-center gap-1 animate-pulse">
+                    <AlertTriangle className="w-3 h-3" /> Dominance Warning: {balanceMetrics.dominantSpeaker.name} ({balanceMetrics.dominantSpeaker.share}%)
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> Balanced Floor
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-muted font-body mt-0.5">
+                AI acts as a fair moderator, not just a judge — encouraging quieter students to contribute without interrupting confident speakers.
+              </p>
+            </div>
+          </div>
+
+          {/* Right: Suggested Prompt from Fair Moderator */}
+          <div className="flex items-center gap-2 bg-raised border border-border px-3 py-1.5 rounded-lg max-w-md w-full sm:w-auto">
+            <Lightbulb className="w-3.5 h-3.5 text-accent shrink-0" />
+            <div className="min-w-0 flex-1">
+              <span className="text-[10px] font-mono text-muted uppercase block leading-none">
+                Suggested Prompt for Quieter Speaker:
+              </span>
+              <p className="text-xs text-ink truncate font-medium mt-0.5">
+                "{balanceMetrics.suggestedPrompt}"
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setTextInput(balanceMetrics.suggestedPrompt)}
+              className="text-[10px] font-mono px-2 py-1 rounded bg-accent text-[#0E0F12] font-semibold hover:opacity-90 transition-opacity shrink-0 cursor-pointer"
+              title="Insert prompt into input box"
+            >
+              Use
+            </button>
+          </div>
+        </div>
+
+        {/* Live Participation Share Mini Bars */}
+        <div className="mt-2.5 pt-2 border-t border-border flex items-center gap-4 text-xs">
+          <span className="text-[10px] font-mono text-muted uppercase tracking-wider shrink-0">
+            Participation Share:
+          </span>
+          <div className="flex-1 flex items-center gap-2 overflow-x-auto py-0.5">
+            {balanceMetrics.participantShares.map((p) => {
+              const isStudent = p.name === "Student";
+              return (
+                <div
+                  key={p.name}
+                  className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-raised border text-[11px] font-mono shrink-0"
+                  style={{
+                    borderColor: p.isDominant ? "#F87171" : p.isQuiet && isStudent ? "#C8F545" : "#2A2E37",
+                  }}
+                >
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ backgroundColor: p.color }}
+                  />
+                  <span className="text-ink font-semibold">
+                    {isStudent ? "You" : p.name}:
+                  </span>
+                  <span
+                    className="font-bold"
+                    style={{ color: p.isDominant ? "#F87171" : p.color }}
+                  >
+                    {p.share}%
+                  </span>
+                  <span className="text-muted text-[10px]">
+                    ({p.turns} {p.turns === 1 ? "turn" : "turns"})
+                  </span>
+                  {p.isDominant && (
+                    <span className="text-[9px] px-1 rounded bg-danger/20 text-danger font-semibold">
+                      High
+                    </span>
+                  )}
+                  {p.isQuiet && (
+                    <span className="text-[9px] px-1 rounded bg-raised text-muted font-semibold">
+                      Quiet
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="text-[10px] font-mono text-muted shrink-0 hidden sm:block">
+            Target: ~{balanceMetrics.idealSharePct}% / speaker
+          </div>
+        </div>
+      </div>
+
       {/* Error banner */}
       {error && (
-        <div className="mx-6 mt-2 p-3 rounded-xl bg-arena-danger/10 border border-arena-danger/30 text-sm text-arena-danger animate-fade-in-up">
+        <div className="mx-6 mt-2 p-3 rounded-card bg-surface border border-l-4 border-l-danger border-border text-xs text-danger animate-fade-in-up">
           {error}
         </div>
       )}
 
       {/* Offline banner */}
       {!online && (
-        <div className="mx-6 mt-2 p-3 rounded-xl bg-arena-warning/10 border border-arena-warning/30 text-sm text-arena-warning animate-fade-in-up">
-          ⚠️ You are offline. AI responses paused.
+        <div className="mx-6 mt-2 p-3 rounded-card bg-surface border border-l-4 border-l-warn border-border text-xs text-warn animate-fade-in-up">
+          ⚠️ Network offline. AI responses are paused until connection restores.
         </div>
       )}
 
       {/* Nudge */}
       {nudgeVisible && (
-        <div className="mx-6 mt-2 p-3 rounded-xl bg-arena-info/10 border border-arena-info/30 text-sm text-arena-info animate-fade-in-up">
-          💡 You haven't spoken in a few minutes. Find an opening to build on recent points!
+        <div className="mx-6 mt-2 p-3 rounded-card bg-surface border border-l-4 border-l-accent border-border text-xs text-ink animate-fade-in-up">
+          💡 You haven't spoken in over 3 minutes. Find an opening to build on recent points!
         </div>
       )}
 
       {/* Transcript */}
-      <div className="flex-1 min-h-0 flex flex-col mx-6 my-3 glass-card overflow-hidden">
-        <div className="px-4 py-2 border-b border-arena-border/50 flex items-center justify-between">
-          <span className="text-sm font-medium text-arena-text-muted">Live Discussion Transcript</span>
+      <div className="flex-1 min-h-0 flex flex-col mx-6 my-3 surface-card overflow-hidden">
+        <div className="px-4 py-2 border-b border-border flex items-center justify-between bg-surface">
+          <span className="text-xs font-heading font-semibold uppercase tracking-wider text-muted">
+            Live Discussion Transcript
+          </span>
           {thinking && (
-            <div className="flex items-center gap-2 text-xs text-arena-accent">
+            <div className="flex items-center gap-2 text-xs font-mono text-accent">
               <div className="flex gap-1">
                 <div className="thinking-dot" />
                 <div className="thinking-dot" />
                 <div className="thinking-dot" />
               </div>
-              Thinking...
+              thinking...
             </div>
           )}
         </div>
@@ -530,21 +740,31 @@ export default function Room() {
       </div>
 
       {/* Bottom controls */}
-      <div className="px-6 py-3 bg-arena-surface border-t border-arena-border">
-        {/* Status row */}
-        <div className="flex items-center gap-4 mb-3 text-xs text-arena-text-muted">
-          <span className={micStatus === "ok" ? "text-arena-success" : "text-arena-danger"}>
-            {micStatus === "ok" ? "🎤 Mic Active" : micStatus === "denied" ? "🚫 Mic Denied" : "⚠️ Mic Unsupported"}
+      <div className="px-6 py-3 bg-surface border-t border-border">
+        {/* Status indicator row */}
+        <div className="flex flex-wrap items-center gap-3 sm:gap-4 mb-2.5 text-xs text-muted font-mono">
+          <span className={micStatus === "ok" ? "text-success" : "text-danger"}>
+            {micStatus === "ok" ? "● Mic Ready" : micStatus === "denied" ? "✕ Mic Blocked" : "▲ Mic Unsupported"}
           </span>
-          <span className={online ? "text-arena-success" : "text-arena-danger"}>
-            {online ? "🟢 Connected" : "🔴 Offline"}
+          <span className={online ? "text-success" : "text-danger"}>
+            {online ? "● Connected" : "✕ Offline"}
           </span>
-          <span className="text-arena-text-muted">
+          {language === "hinglish" && (
+            <button
+              type="button"
+              onClick={() => setSttLang(sttLang === "en-IN" ? "hi-IN" : "en-IN")}
+              className="text-[11px] px-2 py-0.5 rounded bg-raised border border-border hover:border-accent text-ink cursor-pointer transition-colors"
+              title="Click to toggle between Indian English/Hinglish (Latin script) and pure Hindi (Devanagari)"
+            >
+              Mic: {sttLang === "en-IN" ? "Hinglish (en-IN)" : "Hindi (hi-IN)"} ⇄
+            </button>
+          )}
+          <span>
             Patience: {patienceSec}s
           </span>
         </div>
 
-        {/* Controls row */}
+        {/* Action Controls row */}
         <div className="flex items-center gap-3">
           {/* Text input fallback */}
           <form onSubmit={handleTextSubmit} className="flex-1 flex gap-2">
@@ -552,44 +772,49 @@ export default function Room() {
               type="text"
               value={textInput}
               onChange={(e) => setTextInput(e.target.value)}
-              placeholder={micStatus !== "ok" ? "Type your point here..." : "Type if mic is noisy or unavailable..."}
-              className="flex-1 px-4 py-2.5 rounded-xl bg-arena-surface-2 border border-arena-border text-arena-text text-sm placeholder-arena-text-muted/50 focus:outline-none focus:border-arena-accent transition-colors"
+              placeholder={micStatus !== "ok" ? "Type your point here..." : "Type if mic is unavailable or noisy..."}
+              className="flex-1 px-4 py-2.5 rounded-lg bg-surface border border-border text-ink text-sm placeholder-muted/60 focus:outline-none focus:border-accent focus:bg-raised transition-colors min-h-[40px]"
             />
             <button
               type="submit"
               disabled={!textInput.trim()}
-              className="px-4 py-2.5 rounded-xl bg-arena-accent text-white text-sm font-medium hover:bg-arena-accent/80 disabled:opacity-40 transition-colors cursor-pointer"
+              className="px-4 py-2.5 rounded-lg bg-accent text-[#0E0F12] text-sm font-semibold hover:opacity-90 disabled:opacity-40 transition-all cursor-pointer min-h-[40px]"
             >
               Send
             </button>
           </form>
 
-          {/* Action buttons */}
+          {/* Mic Button: accent when listening, with a pulse ring */}
           <button
             onClick={() => setMuted(!muted)}
-            className={`px-4 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
-              muted
-                ? "bg-arena-danger/20 text-arena-danger border border-arena-danger/30"
-                : "bg-arena-surface-2 text-arena-text-muted border border-arena-border hover:border-arena-accent"
-            }`}
+            className={`px-4 py-2.5 rounded-lg text-xs sm:text-sm font-medium transition-all cursor-pointer min-h-[40px] flex items-center gap-2 ${!muted && micStatus === "ok"
+                ? "bg-accent text-[#0E0F12] font-semibold ring-2 ring-accent/60 ring-offset-2 ring-offset-bg shadow-sm"
+                : muted
+                  ? "bg-raised text-muted border border-border hover:text-ink"
+                  : "bg-surface text-danger border border-danger/40"
+              }`}
           >
-            {muted ? "Unmute Mic" : "Mute Mic"}
+            {!muted && micStatus === "ok" && (
+              <span className="w-2 h-2 rounded-full bg-[#0E0F12] inline-block animate-ping" />
+            )}
+            {muted ? "Unmute Mic" : "Mic Active"}
           </button>
 
+          {/* Captions Toggle */}
           <button
             onClick={() => setShowCaptions(!showCaptions)}
-            className={`px-4 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
-              showCaptions
-                ? "bg-arena-info/20 text-arena-info border border-arena-info/30"
-                : "bg-arena-surface-2 text-arena-text-muted border border-arena-border"
-            }`}
+            className={`px-4 py-2.5 rounded-lg text-xs sm:text-sm font-medium transition-colors cursor-pointer min-h-[40px] border ${showCaptions
+                ? "bg-raised text-ink border-accent/40"
+                : "bg-surface text-muted border-border hover:bg-raised hover:text-ink"
+              }`}
           >
             Captions
           </button>
 
+          {/* End GD Button */}
           <button
             onClick={handleEndGD}
-            className="px-4 py-2.5 rounded-xl bg-arena-danger/20 text-arena-danger border border-arena-danger/30 text-sm font-medium hover:bg-arena-danger/30 transition-colors cursor-pointer"
+            className="px-4 py-2.5 rounded-lg bg-raised text-danger border border-danger/30 text-xs sm:text-sm font-medium hover:bg-danger/15 transition-colors cursor-pointer min-h-[40px]"
           >
             End GD
           </button>

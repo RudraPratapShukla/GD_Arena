@@ -46,13 +46,13 @@ export function shouldShowNudge(lastStudentSpeechTime, currentTime, phase) {
 export const PANEL_ORDER = ["Aarav", "Meera", "Kabir", "Riya", "Dev"];
 
 export const PARTICIPANT_INFO = {
-  Moderator: { role: "Moderator", color: "#94a3b8" },
-  Aarav: { role: "Dominator", color: "#ff6b6b" },
-  Meera: { role: "Data-driven", color: "#4ecdc4" },
-  Kabir: { role: "Quiet contributor", color: "#a78bfa" },
-  Riya: { role: "Creative", color: "#fbbf24" },
-  Dev: { role: "Tangential", color: "#38bdf8" },
-  Student: { role: "You", color: "#6c5ce7" },
+  Moderator: { role: "Moderator", color: "#E7E2D6", trait: "Facilitates & opens the session" },
+  Aarav: { role: "Dominator", color: "#FF5C5C", trait: "Direct, assertive challenges" },
+  Meera: { role: "Data-driven", color: "#2DD4BF", trait: "Empirical studies & data" },
+  Kabir: { role: "Quiet contributor", color: "#6EA8FF", trait: "Deep, ethical perspective" },
+  Riya: { role: "Creative", color: "#F472B6", trait: "Lateral thinking & synergy" },
+  Dev: { role: "Tangential", color: "#FBBF24", trait: "Cross-industry analogies" },
+  Student: { role: "You", color: "#C8F545", trait: "Candidate evaluated" },
 };
 
 export const TOPIC_PRESETS = [
