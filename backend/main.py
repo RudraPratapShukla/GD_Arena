@@ -31,10 +31,10 @@ from report import generate_report
 
 app = FastAPI(title="GD Arena API", version="1.0.0")
 
-# CORS for Vite dev server
+# CORS for Vite dev server and production deployments
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -75,11 +75,13 @@ class ReportRequest(BaseModel):
 # ---------- Endpoints ----------
 
 @app.get("/health")
+@app.get("/api/health")
 async def health():
     return {"status": "ok", "service": "gd-arena"}
 
 
 @app.get("/api-key-status")
+@app.get("/api/api-key-status")
 async def api_key_status():
     env_key = os.getenv("GEMINI_API_KEY", "").strip()
     is_valid = bool(env_key and env_key != "your-api-key-here" and len(env_key) > 10)
@@ -90,6 +92,7 @@ async def api_key_status():
 
 
 @app.post("/set-api-key")
+@app.post("/api/set-api-key")
 async def set_api_key_endpoint(req: ApiKeyRequest):
     key = req.api_key.strip()
     if not key or len(key) < 10:
@@ -116,6 +119,7 @@ async def set_api_key_endpoint(req: ApiKeyRequest):
 
 
 @app.post("/turn")
+@app.post("/api/turn")
 async def turn_endpoint(req: TurnRequest):
     result = await get_next_turn(
         topic=req.topic,
@@ -131,6 +135,7 @@ async def turn_endpoint(req: TurnRequest):
 
 
 @app.post("/report")
+@app.post("/api/report")
 async def report_endpoint(req: ReportRequest):
     result = await generate_report(
         topic=req.topic,
