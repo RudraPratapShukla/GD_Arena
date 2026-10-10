@@ -1,10 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PANEL_ORDER, PARTICIPANT_INFO, TOPIC_PRESETS, FORMAT_OPTIONS } from "../lib/controller";
-import { fetchApiKeyStatus, saveApiKey } from "../lib/api";
 
 /**
- * Setup page – Topic, panel size, duration, language, format, patience slider, Gemini API Key.
+ * Setup page – Topic, panel size, duration, language, format, patience slider.
  * AI notice is always visible.
  */
 export default function Setup() {
@@ -16,43 +15,12 @@ export default function Setup() {
   const [language, setLanguage] = useState("english");
   const [format, setFormat] = useState("general");
   const [patienceSec, setPatienceSec] = useState(2.5);
-  const [apiKey, setApiKey] = useState(localStorage.getItem("gd_arena_gemini_key") || "");
-  const [keyStatus, setKeyStatus] = useState({ configured: false, testing: false, message: "" });
-
-  useEffect(() => {
-    fetchApiKeyStatus()
-      .then((data) => {
-        if (data.configured) {
-          setKeyStatus({ configured: true, message: `Connected to Gemini (${data.masked_key})` });
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  const handleSaveKey = async () => {
-    if (!apiKey.trim()) return;
-    setKeyStatus({ ...keyStatus, testing: true, message: "Validating with Gemini 2.0 Flash..." });
-    try {
-      const res = await saveApiKey(apiKey.trim());
-      if (res.status === "ok") {
-        localStorage.setItem("gd_arena_gemini_key", apiKey.trim());
-        setKeyStatus({ configured: true, testing: false, message: res.message });
-      } else {
-        setKeyStatus({ configured: false, testing: false, message: res.message });
-      }
-    } catch (err) {
-      setKeyStatus({ configured: false, testing: false, message: "Could not reach backend to verify key." });
-    }
-  };
 
   const panel = PANEL_ORDER.slice(0, panelSize);
   const effectiveTopic = customTopic.trim() || topic;
 
   const handleEnter = () => {
     if (!effectiveTopic) return;
-    if (apiKey.trim()) {
-      localStorage.setItem("gd_arena_gemini_key", apiKey.trim());
-    }
     navigate("/room", {
       state: {
         topic: effectiveTopic,
@@ -61,7 +29,6 @@ export default function Setup() {
         language,
         format,
         patienceSec,
-        apiKey: apiKey.trim(),
       },
     });
   };
@@ -83,60 +50,6 @@ export default function Setup() {
           <p className="text-sm text-arena-text/90 leading-relaxed">
             All other participants and the moderator are <strong className="text-arena-accent-glow">AI</strong>, not real students.
             This is a practice environment to help you improve your group discussion skills.
-          </p>
-        </div>
-
-        {/* Gemini API Key Section */}
-        <div className="mb-6 p-4 rounded-xl bg-arena-surface border border-arena-border">
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-semibold text-arena-text flex items-center gap-2">
-              <span>🔑 Gemini API Key</span>
-              {keyStatus.configured ? (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-arena-success/20 text-arena-success border border-arena-success/30 font-normal">
-                  Active (Gemini 2.0 Flash)
-                </span>
-              ) : (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-arena-warning/20 text-arena-warning border border-arena-warning/30 font-normal">
-                  Optional / Fallback Mode
-                </span>
-              )}
-            </label>
-            <a
-              href="https://aistudio.google.com/app/apikey"
-              target="_blank"
-              rel="noreferrer"
-              className="text-xs text-arena-accent-glow hover:underline"
-            >
-              Get free key ↗
-            </a>
-          </div>
-          <div className="flex gap-2 mb-1">
-            <input
-              type="password"
-              placeholder="Paste your Gemini API key (AIzaSy...)"
-              value={apiKey}
-              onChange={(e) => {
-                setApiKey(e.target.value);
-                setKeyStatus({ configured: false, testing: false, message: "" });
-              }}
-              className="flex-1 px-3 py-2 rounded-lg bg-arena-surface-2 border border-arena-border text-sm text-arena-text placeholder-arena-text-muted/50 focus:outline-none focus:border-arena-accent"
-            />
-            <button
-              type="button"
-              onClick={handleSaveKey}
-              disabled={!apiKey.trim() || keyStatus.testing}
-              className="px-4 py-2 rounded-lg bg-arena-accent text-white text-xs font-semibold hover:bg-arena-accent/90 disabled:opacity-50 cursor-pointer"
-            >
-              {keyStatus.testing ? "Testing..." : "Verify & Save"}
-            </button>
-          </div>
-          {keyStatus.message && (
-            <p className={`text-xs mt-1.5 ${keyStatus.configured ? "text-arena-success" : "text-arena-warning"}`}>
-              {keyStatus.message}
-            </p>
-          )}
-          <p className="text-[11px] text-arena-text-muted mt-1.5">
-            With a key, participants generate live conversational responses via Gemini 2.0 Flash. Without a key, realistic practice dialogue templates are used.
           </p>
         </div>
 

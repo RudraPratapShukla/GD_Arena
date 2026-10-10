@@ -402,15 +402,6 @@ export default function Room() {
           <h1 className="text-lg font-bold bg-gradient-to-r from-arena-accent to-arena-accent-glow bg-clip-text text-transparent">
             GD Arena
           </h1>
-          {apiKey ? (
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-arena-success/20 text-arena-success border border-arena-success/30 font-medium">
-              Gemini 2.0 Flash
-            </span>
-          ) : (
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-arena-warning/20 text-arena-warning border border-arena-warning/30 font-medium">
-              Practice Mode
-            </span>
-          )}
         </div>
 
         <p className="text-sm text-arena-text-muted max-w-md truncate text-center flex-1 mx-4 font-medium">
